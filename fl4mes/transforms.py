@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from miniutils import pragma
+import pragma
 from numba import cuda, float32
 from .variations import all_variations
 
@@ -39,14 +39,13 @@ class Transform:
         post_transform_kernel = self.post_transform.make_device_function()
         nonlinear_weights = self.nonlinear_weights.astype('float32')
         variations = tuple(self.variations)
-        num_vars = len(self.variations)
 
         @cuda.jit(device=True)
         @pragma.deindex(nonlinear_weights, 'nonlinear_weights')
         @pragma.deindex(variations, 'variations')
         @pragma.unroll(lv=len(variations))
         def apply_variations(xy, variation_cache, lin_x, lin_y):
-            for var in range(lv):
+            for var in range(len(variations)):
                 variations[var](variation_cache, lin_x, lin_y, a, b, c, d, e, f)
                 xy[0] += nonlinear_weights[var] * variation_cache[0]
                 xy[1] += nonlinear_weights[var] * variation_cache[1]

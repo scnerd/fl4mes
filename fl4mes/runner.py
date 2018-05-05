@@ -1,5 +1,5 @@
 import numpy as np
-from miniutils import pragma
+import pragma
 from numba import cuda, float32, int8, int32
 from numba.cuda.random import create_xoroshiro128p_states as make_rng_states, xoroshiro128p_uniform_float32 as get_rng
 
@@ -65,9 +65,9 @@ def make_kernel(num_points, num_steps, transforms, transition_matrix, bounds, re
 
         @cuda.jit(device=True)
         @pragma.deindex(transform_functions, 'transform_functions')
-        @pragma.unroll(lt=len(transforms))
+        @pragma.unroll()
         def call_transform(i, pt):
-            for j in range(lt):
+            for j in range(len(transform_functions)):
                 if i == j:
                     transform_functions[j](pt)
 
