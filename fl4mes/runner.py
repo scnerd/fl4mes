@@ -6,7 +6,7 @@ from numba.cuda.random import create_xoroshiro128p_states as make_rng_states, xo
 from .transforms import SimpleTransform, RotationTransform, DihedralTransform
 
 
-def make_kernel(num_points, num_steps, transforms, transition_matrix, bounds, resolution, min_step=20,
+def make_kernel(num_points, transforms, transition_matrix, bounds, resolution, min_step=20,
                 final_transform=None, final_color=None, rotation_symm=1, dihedral_symm=False):
     """
 
@@ -48,6 +48,7 @@ def make_kernel(num_points, num_steps, transforms, transition_matrix, bounds, re
         transition_matrix = np.vstack((transition_matrix, [[1.0 / num_real_transforms] * num_real_transforms + [0.0] * num_rotation_transforms] * num_rotation_transforms))
 
     transition_matrix = transition_matrix / transition_matrix.sum(axis=1, keepdims=True)
+    transition_matrix = transition_matrix.cumsum(axis=1)
 
     num_transforms = len(transforms)
 
@@ -69,12 +70,12 @@ def make_kernel(num_points, num_steps, transforms, transition_matrix, bounds, re
     final_r, final_g, final_b = final_color
 
     @cuda.jit(device=True)
+    @pragma.unroll()
     def pick_next_transform(current, thread_id, rng_states, transition_matrix):
-        rng = get_rng(rng_states, thread_id)
+        rnd = get_rng(rng_states, thread_id)
         for i in range(num_transforms):
-            if rng <= transition_matrix[current, i]:
+            if rnd <= transition_matrix[current, i]:
                 return i
-            rng -= transition_matrix[current, i]
         return 0
 
     @cuda.jit(device=True)
@@ -90,56 +91,49 @@ def make_kernel(num_points, num_steps, transforms, transition_matrix, bounds, re
                 transform_functions[j](pt)
 
     @cuda.jit
-    def kernel(transform_colors, rng_states, transition_matrix, out):
+    def kernel(transform_colors, rng_states, transition_matrix, num_steps, out):
         thread_id = cuda.grid(1)
-        # if thread_id == 0:
-        #    from pdb import set_trace; set_trace()
-
-        transform_ids = cuda.shared.array(num_steps, dtype=int8)
-        transform_ids[0] = 0
-        if cuda.threadIdx.y == 0:
-            for i in range(1, num_steps):
-                transform_ids[i] = pick_next_transform(transform_ids[i - 1], thread_id, rng_states,
-                                                       transition_matrix)
-        cuda.syncthreads()
 
         pt = cuda.local.array(2, float32)
-        pt[0] = get_rng(rng_states, thread_id) * 2 - 1
-        pt[1] = get_rng(rng_states, thread_id) * 2 - 1
+        pt[0] = get_rng(rng_states, thread_id) * 2.0 - 1.0
+        pt[1] = get_rng(rng_states, thread_id) * 2.0 - 1.0
         r = g = b = 1.0
         final_pt = cuda.local.array(2, float32)
 
-        # cur_transform = pick_next_transform(0, thread_id, rng_states, transition_matrix)
+        cur_transform = int32(get_rng(rng_states, thread_id) * (num_transforms - 1.0))
 
-        for i in range(num_steps):
-            # call_transform(pick_next_transform(cur_transform, thread_id, rng_states, transition_matrix), pt)
-            call_transform(i, pt)
+        for i in range(min(num_steps, min_step)):
+            cur_transform = pick_next_transform(cur_transform, thread_id, rng_states, transition_matrix)
+            call_transform(cur_transform, pt)
+
+        for i in range(max(0, num_steps - min_step)):
+            cur_transform = pick_next_transform(cur_transform, thread_id, rng_states, transition_matrix)
+            call_transform(cur_transform, pt)
             if i < num_real_transforms:
-                r = (r + transform_colors[i, _r]) / 2.0
-                g = (g + transform_colors[i, _g]) / 2.0
-                b = (b + transform_colors[i, _b]) / 2.0
+                r = (r + transform_colors[cur_transform, _r]) / 2.0
+                g = (g + transform_colors[cur_transform, _g]) / 2.0
+                b = (b + transform_colors[cur_transform, _b]) / 2.0
 
-            if i >= min_step:
-                final_pt[0] = pt[0]
-                final_pt[1] = pt[1]
-                final_transform(final_pt)
+            final_pt[0] = pt[0]
+            final_pt[1] = pt[1]
+            final_transform(final_pt)
 
-                rf = (r + final_r) / 2.0
-                gf = (g + final_g) / 2.0
-                bf = (b + final_b) / 2.0
+            rf = (r + final_r) / 2.0
+            gf = (g + final_g) / 2.0
+            bf = (b + final_b) / 2.0
 
-                xbin = hist(final_pt[0], xmin, xptp, xres)
-                ybin = hist(final_pt[1], ymin, yptp, yres)
-                cuda.atomic.add(out, (_r, ybin, xbin), rf)
-                cuda.atomic.add(out, (_g, ybin, xbin), gf)
-                cuda.atomic.add(out, (_b, ybin, xbin), bf)
-                cuda.atomic.add(out, (_a, ybin, xbin), 1.0)
+            xbin = hist(final_pt[0], xmin, xptp, xres)
+            ybin = hist(final_pt[1], ymin, yptp, yres)
+            cuda.atomic.add(out, (_r, ybin, xbin), rf)
+            cuda.atomic.add(out, (_g, ybin, xbin), gf)
+            cuda.atomic.add(out, (_b, ybin, xbin), bf)
+            cuda.atomic.add(out, (_a, ybin, xbin), 1.0)
 
     threads_per_block = num_points
 
-    def runner(blocks):
+    def runner(blocks, num_steps):
         rng_states = make_rng_states(threads_per_block * blocks, seed=np.random.randint(2**31-1))
-        kernel[(blocks,), threads_per_block](transform_colors, rng_states, transition_matrix, cuda_output_image)
+        kernel[blocks, threads_per_block](transform_colors, rng_states, transition_matrix, num_steps, cuda_output_image)
 
     return runner, return_image
 

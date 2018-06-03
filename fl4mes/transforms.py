@@ -72,8 +72,6 @@ class Transform:
             lin_x = a * xy[0] + b * xy[1] + c
             lin_y = d * xy[0] + e * xy[1] + f
             xy[:] = 0.0
-            variation_cache[:] = 0.0
-            # variations[j](variation_cache, lin_x, lin_y, a, b, c, d, e, f)
             apply_variations(xy, variation_cache, lin_x, lin_y)
             post_transform_kernel(xy)
 
