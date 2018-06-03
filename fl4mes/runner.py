@@ -98,7 +98,7 @@ def make_kernel(num_points, num_steps, transforms, transition_matrix, bounds, re
         transform_ids = cuda.shared.array(num_steps, dtype=int8)
         transform_ids[0] = 0
         if cuda.threadIdx.y == 0:
-            for i in range(1, num_steps, cuda.blockDim.x):
+            for i in range(1, num_steps):
                 transform_ids[i] = pick_next_transform(transform_ids[i - 1], thread_id, rng_states,
                                                        transition_matrix)
         cuda.syncthreads()
