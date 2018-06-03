@@ -10,8 +10,8 @@ def softmax(x):
 
 
 class SimpleTransform:
-    def __init__(self):
-        self.linear = np.random.normal(size=(2, 3))
+    def __init__(self, linear_transform=None):
+        self.linear = linear_transform or np.random.normal(size=(2, 3))
 
     def make_device_function(self):
         (a, b, c), (d, e, f) = self.linear.astype('float32')
@@ -24,6 +24,22 @@ class SimpleTransform:
             xy[1] = d * x + e * y + f
 
         return device_transform
+
+
+class RotationTransform(SimpleTransform):
+    def __init__(self, angle):
+        super().__init__(np.array([
+            [np.cos(angle), -np.sin(angle), 0],
+            [np.sin(angle), np.cos(angle), 0]
+        ]))
+
+
+class DihedralTransform(SimpleTransform):
+    def __init__(self):
+        super().__init__(np.array([
+            [-1, 0, 0],
+            [ 0, 1, 0]
+        ]))
 
 
 class Transform:
